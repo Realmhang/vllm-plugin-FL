@@ -5,14 +5,22 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import os
+<<<<<<< HEAD
+from typing import TYPE_CHECKING, Optional, TypeVar
+=======
 from datetime import timedelta
 from functools import cache, wraps
 from typing import TYPE_CHECKING, Callable, Optional, TypeVar, Union
+>>>>>>> d8d02633f3bb5d08166ad032ed0150009279f0f4
 from typing_extensions import ParamSpec
 
 import torch
 
+<<<<<<< HEAD
+from vllm.attention.backends.registry import AttentionBackendEnum
+=======
 from vllm.attention.backends.registry import AttentionBackendEnum, register_backend
+>>>>>>> d8d02633f3bb5d08166ad032ed0150009279f0f4
 from vllm.logger import init_logger
 
 from vllm.platforms import Platform, PlatformEnum
@@ -33,26 +41,11 @@ logger = init_logger(__name__)
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
 
-@cache
-def _get_backend(
-    use_mla: bool,
-    device_info: Optional[DeviceInfo] = None,
-) -> list[str]:
-    """Get backend priorities with lazy import to avoid circular dependency."""
-    if use_mla:
-        raise NotImplementedError("NOT support mla now!")
-        # return "vllm_fl.attention.backends.mla.MLAFLBackend"
-    else:
-        if "USE_FLAGGEMS" in os.environ and os.environ["USE_FLAGGEMS"] == "1":
-            return [AttentionBackendEnum.TRITON_ATTN] #"vllm_fl.attention.attention.AttentionFLBackend"
-        return [AttentionBackendEnum.FLASH_ATTN] 
-        
-
 class PlatformFL(Platform):
     _enum = PlatformEnum.OOT
     device_info = DeviceInfo()
-    device_name = device_info.device_type 
-    device_type = device_info.device_type 
+    device_name = device_info.device_type
+    device_type = device_info.device_type
     dispatch_key = device_info.dispatch_key
     torch_device_fn = device_info.torch_device_fn
     ray_device_key: str = "flagos"
@@ -64,6 +57,10 @@ class PlatformFL(Platform):
         """Stateless version of [torch.cuda.is_available][]."""
         return self.device_type == "cuda"
     
+    def is_cuda(self) -> bool:
+        """Stateless version of [torch.cuda.is_available][]."""
+        return self.device_type == "cuda"
+
     def is_cuda(self) -> bool:
         """Stateless version of [torch.cuda.is_available][]."""
         return self.device_type == "cuda"
@@ -80,9 +77,9 @@ class PlatformFL(Platform):
         pass
 
     @classmethod
-    def get_current_memory_usage(cls,
-                                 device: Optional[torch.types.Device] = None
-                                 ) -> float:
+    def get_current_memory_usage(
+        cls, device: Optional[torch.types.Device] = None
+    ) -> float:
         cls.torch_device_fn.empty_cache()
         cls.torch_device_fn.reset_peak_memory_stats(device)
         return cls.torch_device_fn.max_memory_allocated(device)
@@ -93,19 +90,15 @@ class PlatformFL(Platform):
         Set the device for the current platform.
         """
         cls.torch_device_fn.set_device(device)
-    
+
     @classmethod
     def empty_cache(cls) -> None:
         cls.torch_device_fn.empty_cache()
 
     @classmethod
-    def get_device_capability(cls, device_id: int = 0):
-        pass
-
-    @classmethod
     def get_device_name(cls, device_id: int = 0) -> str:
         return cls.device_name
-        
+
     ### TODO(lms): change pin_memory depend device
     @classmethod
     def is_pin_memory_available(cls):
@@ -122,7 +115,13 @@ class PlatformFL(Platform):
 
         cache_config = vllm_config.cache_config
         if cache_config and cache_config.block_size is None:
-            cache_config.block_size = 16
+            # Ascend NPU requires block_size to be a multiple of 128
+            # CUDA can use smaller block sizes like 16
+            if cls.device_type == "npu":
+                cache_config.block_size = 128
+                logger.info("Setting kv cache block size to 128 for Ascend NPU.")
+            else:
+                cache_config.block_size = 16
 
         # TODO(lucas): handle this more gracefully
         # Note: model_config may be None during testing
@@ -146,7 +145,8 @@ class PlatformFL(Platform):
         if compilation_config.compile_sizes is None:
             compilation_config.compile_sizes = []
 
-        if (parallel_config.data_parallel_size > 1
+        if (
+            parallel_config.data_parallel_size > 1
             and compilation_config.cudagraph_mode != CUDAGraphMode.NONE
         ):
             # TODO: Piecewise Cuda graph might be enabled
@@ -168,43 +168,28 @@ class PlatformFL(Platform):
         selected_backend: "AttentionBackendEnum",
         attn_selector_config: "AttentionSelectorConfig",
     ) -> list[str]:
-        # from vllm_fl.attention.custom_attention import register_attention
-        # register_attention()
-        device_capability = cls.get_device_capability()
-        
-        if selected_backend is None:
-            backend = _get_backend(
-                use_mla=False,
-                device_info=cls.device_info,
-            )[0]  # get the highest priority backend
-        else:
-            backend = selected_backend
-        
-        backend_class = backend.get_class()
-        invalid_reasons = backend_class.validate_configuration(
-                    device_capability=device_capability,
-                    **attn_selector_config._asdict(),
-                )
-        reasons_str = (
-            "{"
-            + ", ".join(
-                f"{backend.name}: [{', '.join(invalid_reasons)}]"
-            )
-            + "}"
-        )
-        config_str = attn_selector_config.__repr__()
-        logger.debug_once(
-            f"Some attention backends are not valid for {cls.device_name} with "
-            f"{config_str}. Reasons: {reasons_str}."
-        )
+        """Get the attention backend class path using the dispatch mechanism."""
+        from vllm_fl.dispatch import call_op
+
+        use_mla = attn_selector_config.use_mla
+
+        backend_path = call_op("attention_backend", use_mla=use_mla)
 
         logger.info_once(
-            "Using %s attention backend out of potential backends: %s",
-            backend.name,
-            tuple(backend.name),
+            "Using attention backend via dispatch (use_mla=%s): %s",
+            use_mla,
+            backend_path,
             scope="local",
         )
-        return backend.get_path()
+        return backend_path
+
+    @classmethod
+    def get_supported_vit_attn_backends(cls) -> list["AttentionBackendEnum"]:
+        return [
+            AttentionBackendEnum.TORCH_SDPA,
+            AttentionBackendEnum.FLASH_ATTN,
+        ]
+
 
     @classmethod
     def get_vit_attn_backend(
@@ -213,9 +198,27 @@ class PlatformFL(Platform):
         dtype: torch.dtype,
         backend: Optional["AttentionBackendEnum"] = None,
     ) -> list[str]:
-        return [
-            "vllm_fl.attention.attention.AttentionFLBackend"
-        ]
+        if backend is not None:
+            assert backend in cls.get_supported_vit_attn_backends(), (
+                f"Backend {backend} is not supported for vit attention. "
+                f"Supported backends are: {cls.get_supported_vit_attn_backends()}"
+            )
+            logger.info_once(f"Using backend {backend} for vit attention")
+            return backend
+
+        # Try FlashAttention first
+        if (cc := cls.get_device_capability()) and cc.major >= 8:
+            try:
+                backend_class = AttentionBackendEnum.FLASH_ATTN.get_class()
+                if backend_class.supports_head_size(
+                    head_size
+                ) and backend_class.supports_dtype(dtype):
+                    return AttentionBackendEnum.FLASH_ATTN
+            except ImportError:
+                pass
+
+        return AttentionBackendEnum.TORCH_SDPA
+
 
     @classmethod
     def get_punica_wrapper(cls) -> str:
@@ -226,26 +229,45 @@ class PlatformFL(Platform):
     def get_device_communicator_cls(cls) -> str:
         if cls.dist_backend == "flagcx":
             logger.info("Using CommunicatorFL for communication.")
-            return (
-                "vllm_fl.distributed.communicator.CommunicatorFL"  # noqa
-            )
+            return "vllm_fl.distributed.communicator.CommunicatorFL"  # noqa
         else:
             logger.info("Using CudaCommunicator for communication.")
-            return (
-                "vllm.distributed.device_communicators.cuda_communicator.CudaCommunicator" # noqa
-            )
+            return "vllm.distributed.device_communicators.cuda_communicator.CudaCommunicator"  # noqa
 
-    
     @classmethod
     def get_static_graph_wrapper_cls(cls) -> str:
         return "vllm_fl.compilation.graph.GraphWrapper"
-    
+
     @classmethod
     def support_static_graph_mode(cls) -> bool:
         if cls.device_name in ["cuda", "npu"]:
             return True
         return False
-    
+
+    @classmethod
+    def insert_blocks_to_device(
+        cls,
+        src_cache: torch.Tensor,
+        dst_cache: torch.Tensor,
+        src_block_indices: torch.Tensor,
+        dst_block_indices: torch.Tensor,
+    ) -> None:
+        """Copy blocks from src_cache to dst_cache device ."""
+        _src_cache = src_cache[:, src_block_indices]
+        dst_cache[:, dst_block_indices] = _src_cache.to(dst_cache.device)
+
+    @classmethod
+    def swap_out_blocks_to_host(
+        cls,
+        src_cache: torch.Tensor,
+        dst_cache: torch.Tensor,
+        src_block_indices: torch.Tensor,
+        dst_block_indices: torch.Tensor,
+    ) -> None:
+        """Copy blocks from device to host (CPU)."""
+        _src_cache = src_cache[:, src_block_indices]
+        dst_cache[:, dst_block_indices] = _src_cache.cpu()
+
     @classmethod
     def insert_blocks_to_device(
         cls,
@@ -278,7 +300,7 @@ class PlatformFL(Platform):
     @classmethod
     def opaque_attention_op(cls) -> bool:
         return True
-    
+
     @classmethod
     def use_custom_allreduce(cls) -> bool:
         if cls.dist_backend == "flagcx":
@@ -287,9 +309,13 @@ class PlatformFL(Platform):
 
     @classmethod
     def get_device_capability(cls, device_id: int = 0) -> DeviceCapability:
+        # TODO(yxa): For NPU/Ascend devices, return None (no capability version like CUDA)
+        if cls.device_type == "npu":
+            return None
+        # For CUDA devices
         major, minor = torch.cuda.get_device_capability(device_id)
         return DeviceCapability(major=major, minor=minor)
-    
+
     @classmethod
     def is_fully_connected(cls, physical_device_ids: list[int]) -> bool:
         try:
@@ -298,7 +324,9 @@ class PlatformFL(Platform):
             """
             query if the set of gpus are fully connected by nvlink (1 hop)
             """
-            handles = [pynvml.nvmlDeviceGetHandleByIndex(i) for i in physical_device_ids]
+            handles = [
+                pynvml.nvmlDeviceGetHandleByIndex(i) for i in physical_device_ids
+            ]
             for i, handle in enumerate(handles):
                 for j, peer_handle in enumerate(handles):
                     if i < j:
@@ -319,4 +347,3 @@ class PlatformFL(Platform):
             return True
         except:
             return False
-    
