@@ -78,7 +78,7 @@ def patch_fp8_mqa_logits_dim():
     Upstream fix: https://github.com/vllm-project/vllm/pull/32652
     We wrap fp8_mqa_logits to flatten k_scale before calling the native impl.
     """
-    import vllm.utils.deep_gemm as dg_mod
+    import vllm_fl.mx_utils.deep_gemm as dg_mod
 
     dg_mod._lazy_init()
     _orig_impl = dg_mod._fp8_mqa_logits_impl

@@ -156,7 +156,7 @@ class GraphWrapper:
                     # and disable gc for the rest of the graphs.
                     stack.enter_context(patch("gc.collect", lambda: None))
                     stack.enter_context(
-                        patch("vllm_fl.platform.PlatformFL.empty_cache", lambda: None)
+                        patch("vllm_fl.device_platform.PlatformFL.empty_cache", lambda: None)
                     )
 
             set_graph_pool_id(self.graph_pool)

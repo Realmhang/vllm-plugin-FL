@@ -9,7 +9,7 @@ This thin wrapper inherits from vLLM's ``DeepseekV2ForCausalLM`` which already
 handles MLA, MoE, the DSA Indexer, and MTP speculative decoding layers.
 """
 
-from vllm.model_executor.models.deepseek_v2 import DeepseekV2ForCausalLM
+from vllm_fl.models.deepseek_v2 import DeepseekV2ForCausalLM
 
 
 class GlmMoeDsaForCausalLM(DeepseekV2ForCausalLM):
